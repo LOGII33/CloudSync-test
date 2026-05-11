@@ -1,0 +1,41 @@
+# Minimal config for Phase 1: cloudsync validate --config configs/test.yaml
+# Point source at a small test directory on your machine.
+
+project:
+  name: validate-only
+  log_dir: /tmp/cloudsync-test-logs
+
+remote:
+  name: test-remote
+  type: s3
+  provider: AWS
+  region: ap-south-1
+  bucket: placeholder-bucket
+
+directories:
+  - name: testdir
+    source: /tmp/cloudsync-test-src
+    dest: test/prefix
+    watch: true
+    exclude:
+      - "*.pyc"
+
+sync:
+  transfers: 4
+  checkers: 4
+  checksum: true
+  backup_versions: false
+  version_dir: versions
+  debounce_seconds: 5
+
+schedule:
+  realtime: true
+  weekly_full:
+    enabled: false
+    day: sunday
+    time: "02:00"
+    max_age: 8d
+  monthly_audit:
+    enabled: false
+    day: 1
+    time: "03:00"

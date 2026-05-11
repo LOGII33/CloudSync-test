@@ -1,0 +1,74 @@
+# cloudsync.yaml — Single config drives everything (template)
+
+project:
+  name: tamizh-migration
+  log_dir: /home/annaincubator/rclone-logs
+
+remote:
+  name: test-run-animators
+  type: s3
+  provider: AWS
+  region: ap-south-1
+  bucket: animators-418272779024-ap-south-1-an
+  # access_key and secret_key read from env vars:
+  # RCLONE_CONFIG_MYREMOTE_ACCESS_KEY_ID
+  # RCLONE_CONFIG_MYREMOTE_SECRET_ACCESS_KEY
+
+directories:
+  - name: AIML
+    source: /home/annaincubator/Tamizh/AIML
+    dest: Tamizh/AIML
+    watch: true
+    exclude:
+      - "*.pyc"
+      - "__pycache__/**"
+      - ".ipynb_checkpoints/**"
+
+  - name: Animators
+    source: /home/annaincubator/Tamizh/Animators
+    dest: Tamizh/Animators
+    watch: true
+    exclude:
+      - "*.tmp"
+      - "*.blend1"
+
+  - name: Projects
+    source: /home/annaincubator/Tamizh/Projects
+    dest: Tamizh/Projects
+    watch: true
+    exclude:
+      - "node_modules/**"
+      - ".git/**"
+      - "*.swp"
+
+  - name: Documents
+    source: /home/annaincubator/Tamizh/Documents
+    dest: Tamizh/Documents
+    watch: true
+    exclude:
+      - "~$*"
+
+  - name: Archives
+    source: /home/annaincubator/Tamizh/Archives
+    dest: Tamizh/Archives
+    watch: false
+
+sync:
+  transfers: 32
+  checkers: 32
+  checksum: true
+  backup_versions: true
+  version_dir: versions
+  debounce_seconds: 30
+
+schedule:
+  realtime: true
+  weekly_full:
+    enabled: true
+    day: sunday
+    time: "02:00"
+    max_age: 8d
+  monthly_audit:
+    enabled: true
+    day: 1
+    time: "03:00"
