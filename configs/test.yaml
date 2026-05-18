@@ -1,41 +1,45 @@
-# Minimal config for Phase 1: cloudsync validate --config configs/test.yaml
-# Point source at a small test directory on your machine.
+# configs/test.yaml — Phase 1 validation (Mode A: remote already in rclone)
+# Only name + bucket under remote; type/provider/region come from rclone config.
 
 project:
-  name: validate-only
+  name: cloudsync-test
   log_dir: /tmp/cloudsync-test-logs
 
 remote:
-  name: test-remote
-  type: s3
-  provider: AWS
-  region: ap-south-1
-  bucket: placeholder-bucket
+  name: test-run-animators
+  bucket: animators-418272779024-ap-south-1-an
 
 directories:
-  - name: testdir
-    source: /tmp/cloudsync-test-src
-    dest: test/prefix
+  - name: test-data
+    source: /tmp/cloudsync-test-source
+    dest: Tamizh/test-data
     watch: true
     exclude:
-      - "*.pyc"
+      - "*.tmp"
+      - "*.swp"
+      - "__pycache__/**"
+
+  - name: test-static
+    source: /tmp/cloudsync-test-static
+    dest: Tamizh/test-static
+    watch: false
 
 sync:
-  transfers: 4
-  checkers: 4
+  transfers: 8
+  checkers: 8
   checksum: true
-  backup_versions: false
+  backup_versions: true
   version_dir: versions
-  debounce_seconds: 5
+  debounce_seconds: 10
 
 schedule:
   realtime: true
   weekly_full:
-    enabled: false
+    enabled: true
     day: sunday
     time: "02:00"
     max_age: 8d
   monthly_audit:
-    enabled: false
+    enabled: true
     day: 1
     time: "03:00"

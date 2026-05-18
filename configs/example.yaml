@@ -1,4 +1,7 @@
 # cloudsync.yaml — Single config drives everything (template)
+#
+# Remote: use Mode A (name + bucket only) when the remote already exists in `rclone config`.
+#         Use Mode B (add type, provider, region) for future `cloudsync setup` flows; never put keys in YAML.
 
 project:
   name: tamizh-migration
@@ -10,9 +13,7 @@ remote:
   provider: AWS
   region: ap-south-1
   bucket: animators-418272779024-ap-south-1-an
-  # access_key and secret_key read from env vars:
-  # RCLONE_CONFIG_MYREMOTE_ACCESS_KEY_ID
-  # RCLONE_CONFIG_MYREMOTE_SECRET_ACCESS_KEY
+  # Mode B above: credentials belong in rclone config or env — never in this file.
 
 directories:
   - name: AIML
