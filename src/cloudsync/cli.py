@@ -1,20 +1,13 @@
 """
 cloudsync.cli — Click-based CLI entry point.
 
-Phase 1 commands:
-  cloudsync validate --config path/to/config.yaml
-  cloudsync init --output path/to/config.yaml
-  cloudsync status --config path/to/config.yaml
-
-Later phases will add:
-  cloudsync watch start/stop/logs
-  cloudsync diff / sync / check
-  cloudsync changelog
-  cloudsync schedule install/remove
+Phase 1: validate, init, status
+Phase 2: watch start, watch stop, watch status, watch logs
 """
 
 from __future__ import annotations
 
+import shutil
 import sys
 from pathlib import Path
 
@@ -23,10 +16,9 @@ import click
 from cloudsync.config import load_config, generate_template, ConfigError, CloudSyncConfig
 
 
-# ── Shared options ───────────────────────────────────────────
+# ── Shared helpers ───────────────────────────────────────────
 
 def config_option(required: bool = True):
-    """Reusable --config option for commands that need a config file."""
     return click.option(
         "--config", "-c",
         type=click.Path(exists=False),
@@ -37,10 +29,8 @@ def config_option(required: bool = True):
 
 
 def _load_or_fail(config_path: str, check_paths: bool = True) -> CloudSyncConfig:
-    """Load config and handle errors with clean CLI output."""
     try:
-        config = load_config(config_path, check_paths=check_paths)
-        return config
+        return load_config(config_path, check_paths=check_paths)
     except FileNotFoundError as e:
         click.secho(f"Error: {e}", fg="red")
         sys.exit(1)
@@ -60,56 +50,45 @@ def cli():
     pass
 
 
-# ── Phase 1 commands ─────────────────────────────────────────
+# ── Phase 1: init, validate, status ─────────────────────────
 
 @cli.command()
-@click.option("--output", "-o", default="cloudsync.yaml", help="Output path for the config file")
+@click.option("--output", "-o", default="cloudsync.yaml", help="Output path for config file")
 @click.option("--force", "-f", is_flag=True, help="Overwrite existing file")
 def init(output: str, force: bool):
     """Create a new cloudsync config file from template."""
     output_path = Path(output)
-
     if output_path.exists() and not force:
         click.secho(f"File already exists: {output_path}", fg="yellow")
-        click.echo("Use --force to overwrite, or choose a different path with --output")
+        click.echo("Use --force to overwrite, or --output for different path")
         sys.exit(1)
-
     template = generate_template()
     output_path.write_text(template)
     click.secho(f"Created config: {output_path}", fg="green")
-    click.echo("\nNext steps:")
-    click.echo(f"  1. Edit {output_path} with your source/dest paths")
+    click.echo(f"\nNext steps:")
+    click.echo(f"  1. Edit {output_path} with your paths and remote details")
     click.echo(f"  2. Run: cloudsync validate --config {output_path}")
     click.echo(f"  3. Run: cloudsync status --config {output_path}")
 
 
 @cli.command()
 @config_option()
-@click.option("--check-paths/--no-check-paths", default=True, help="Verify source directories exist")
+@click.option("--check-paths/--no-check-paths", default=True, help="Verify source dirs exist")
 def validate(config: str, check_paths: bool):
     """Validate a cloudsync config file."""
     click.echo(f"Validating: {config}")
-
     cfg = _load_or_fail(config, check_paths=check_paths)
 
     click.secho("Config is valid!", fg="green")
     click.echo()
-
-    # Summary
     click.echo(f"  Project:      {cfg.project.name}")
-    if cfg.remote.existing:
-        click.echo(f"  Remote:       {cfg.remote.name} (Mode A — existing rclone remote)")
-        click.echo(f"  Bucket:       {cfg.remote.bucket}  (path prefix / logical target in YAML)")
-        click.echo("  Type/region:  (read from rclone config, not YAML)")
-    else:
-        click.echo(f"  Remote:       {cfg.remote.name} (Mode B — {cfg.remote.type}/{cfg.remote.provider})")
-        click.echo(f"  Bucket:       {cfg.remote.bucket}")
-        click.echo(f"  Region:       {cfg.remote.region}")
+    click.echo(f"  Remote:       {cfg.remote.name} ({cfg.remote.type}/{cfg.remote.provider})")
+    click.echo(f"  Bucket:       {cfg.remote.bucket}")
+    click.echo(f"  Region:       {cfg.remote.region}")
     click.echo(f"  Directories:  {len(cfg.directories)}")
     click.echo(f"  Log dir:      {cfg.project.log_dir}")
     click.echo()
 
-    # Directory table
     click.echo("  Directories:")
     for d in cfg.directories:
         watch_icon = "👁" if d.watch else "—"
@@ -119,8 +98,6 @@ def validate(config: str, check_paths: bool):
         click.echo(f"       dst:  {cfg.remote.bucket}/{d.dest}{excludes}")
 
     click.echo()
-
-    # Sync settings
     click.echo("  Sync:")
     click.echo(f"    Transfers:  {cfg.sync.transfers}")
     click.echo(f"    Checkers:   {cfg.sync.checkers}")
@@ -128,8 +105,6 @@ def validate(config: str, check_paths: bool):
     click.echo(f"    Debounce:   {cfg.sync.debounce_seconds}s")
 
     click.echo()
-
-    # Schedule
     click.echo("  Schedule:")
     click.echo(f"    Real-time:  {cfg.schedule.realtime}")
     if cfg.schedule.weekly_full.enabled:
@@ -141,14 +116,13 @@ def validate(config: str, check_paths: bool):
 @cli.command()
 @config_option()
 def status(config: str):
-    """Show current sync status — watchers, last sync, pending changes."""
+    """Show current sync status — tools, watchers, remotes."""
     cfg = _load_or_fail(config, check_paths=False)
 
     click.secho(f"cloudsync: {cfg.project.name}", fg="cyan", bold=True)
     click.echo()
 
     # Check external tools
-    import shutil
     tools = {
         "rclone": shutil.which("rclone"),
         "fswatch": shutil.which("fswatch"),
@@ -161,34 +135,39 @@ def status(config: str):
             click.secho(f"    ✓ {tool}: {path}", fg="green")
         else:
             click.secho(f"    ✗ {tool}: not found", fg="red")
-
     click.echo()
 
-    # Check rclone remote exists
+    # Check rclone remote
     if tools["rclone"]:
         import subprocess
-        result = subprocess.run(
-            ["rclone", "listremotes"],
-            capture_output=True, text=True, timeout=10,
-        )
+        result = subprocess.run(["rclone", "listremotes"], capture_output=True, text=True, timeout=10)
         remotes = [r.strip().rstrip(":") for r in result.stdout.strip().split("\n") if r.strip()]
         if cfg.remote.name in remotes:
             click.secho(f"  rclone remote '{cfg.remote.name}': configured", fg="green")
         else:
             click.secho(f"  rclone remote '{cfg.remote.name}': NOT configured", fg="red")
-            click.echo(f"    Available remotes: {', '.join(remotes) if remotes else '(none)'}")
-            click.echo(f"    Run: rclone config  →  create remote named '{cfg.remote.name}'")
-    else:
-        click.secho("  rclone: not found on PATH — skipping remote checks", fg="yellow")
-
+            click.echo(f"    Run: rclone config  → create remote named '{cfg.remote.name}'")
     click.echo()
-    if cfg.remote.existing:
-        click.echo("  Remote mode:  Using existing rclone remote (YAML has name + bucket only)")
-        click.echo("                Keys and backend type live in ~/.config/rclone/rclone.conf")
-    else:
-        click.echo("  Remote mode:  Full remote spec in YAML (future: cloudsync setup / rclone config create)")
-        click.echo(f"                Would target type={cfg.remote.type}, region={cfg.remote.region}")
 
+    # Check watcher status (Phase 2)
+    if tools["fswatch"]:
+        from cloudsync.watcher import get_status
+        from cloudsync.logger import setup_logging
+        setup_logging(cfg, console=False)
+
+        statuses = get_status(cfg)
+        if statuses:
+            click.echo("  Watchers:")
+            for name, meta in statuses.items():
+                if meta.status == "running":
+                    click.secho(f"    ✓ {name}: running (PID {meta.pid}, {meta.event_count} events)",
+                                fg="green")
+                elif meta.status == "dead":
+                    click.secho(f"    ✗ {name}: dead (was PID {meta.pid})", fg="red")
+                else:
+                    click.secho(f"    — {name}: stopped", fg="yellow")
+                    if meta.last_event_at:
+                        click.echo(f"      Last event: {meta.last_event_at}")
     click.echo()
 
     # Check source directories
@@ -196,70 +175,196 @@ def status(config: str):
     for d in cfg.directories:
         source_exists = Path(d.source).exists()
         if source_exists:
-            # Count files
             import os
             file_count = sum(1 for _, _, files in os.walk(d.source) for _ in files)
             click.secho(f"    ✓ {d.name}: {d.source} ({file_count:,} files)", fg="green")
         else:
             click.secho(f"    ✗ {d.name}: {d.source} (not found)", fg="red")
-
     click.echo()
 
-    # Check log directory
-    log_path = Path(cfg.project.log_dir)
-    if log_path.exists():
-        click.secho(f"  Log dir: {cfg.project.log_dir} (exists)", fg="green")
-    else:
-        click.secho(f"  Log dir: {cfg.project.log_dir} (will be created on first run)", fg="yellow")
-
-    click.echo()
-
-    # Check inotify limit (Linux only)
+    # Check inotify limit
     inotify_path = Path("/proc/sys/fs/inotify/max_user_watches")
     if inotify_path.exists():
         limit = int(inotify_path.read_text().strip())
-        watched_dirs = sum(1 for d in cfg.directories if d.watch)
         if limit < 524288:
-            click.secho(
-                f"  ⚠ inotify watch limit: {limit:,} (recommend 2,097,152); "
-                f"{watched_dirs} dir(s) marked watch in config",
-                fg="yellow",
-            )
+            click.secho(f"  ⚠ inotify limit: {limit:,} (recommend 2,097,152)", fg="yellow")
             click.echo("    Fix: echo 2097152 | sudo tee /proc/sys/fs/inotify/max_user_watches")
         else:
-            click.secho(f"  inotify watch limit: {limit:,} (OK)", fg="green")
+            click.secho(f"  inotify limit: {limit:,} (OK)", fg="green")
 
 
-# ── Placeholder commands for later phases ────────────────────
+# ── Phase 2: watch commands ──────────────────────────────────
 
 @cli.group()
 def watch():
-    """Manage fswatch file monitors. (Phase 2)"""
+    """Manage fswatch file monitors."""
     pass
 
 
 @watch.command("start")
 @config_option()
-def watch_start(config: str):
-    """Start fswatch for all monitored directories."""
-    click.secho("Not yet implemented — Phase 2", fg="yellow")
+@click.option("--dir", "-d", "directory", help="Start watcher for specific directory only")
+@click.option("--daemon", is_flag=True, help="Run in background (for systemd/scripts)")
+def watch_start(config: str, directory: str, daemon: bool):
+    """Start fswatch for monitored directories."""
+    cfg = _load_or_fail(config)
+
+    # Check fswatch is installed
+    if not shutil.which("fswatch"):
+        click.secho("Error: fswatch not found. Install with: sudo apt install fswatch", fg="red")
+        sys.exit(1)
+
+    from cloudsync.watcher import start_watcher, start_all, get_watched_directories
+    from cloudsync.logger import setup_logging
+    log_dirs = setup_logging(cfg, console=not daemon)
+
+    if directory:
+        # Start single directory
+        dir_configs = [d for d in cfg.directories if d.name == directory and d.watch]
+        if not dir_configs:
+            click.secho(f"Error: Directory '{directory}' not found or watch=false", fg="red")
+            available = [d.name for d in get_watched_directories(cfg)]
+            click.echo(f"  Available: {', '.join(available)}")
+            sys.exit(1)
+
+        try:
+            meta = start_watcher(cfg, dir_configs[0])
+            click.secho(f"Started watcher for '{directory}' (PID {meta.pid})", fg="green")
+        except RuntimeError as e:
+            click.secho(f"Error: {e}", fg="red")
+            sys.exit(1)
+    else:
+        # Start all watched directories
+        results = start_all(cfg)
+        started = sum(1 for m in results.values() if m.status == "running")
+        failed = sum(1 for m in results.values() if m.status == "error")
+
+        for name, meta in results.items():
+            if meta.status == "running":
+                click.secho(f"  ✓ {name}: started (PID {meta.pid})", fg="green")
+            else:
+                click.secho(f"  ✗ {name}: failed to start", fg="red")
+
+        click.echo()
+        click.secho(f"Started {started}/{started + failed} watchers", fg="green" if not failed else "yellow")
+        click.echo(f"Logs: {cfg.project.log_dir}/fswatch/")
+
+    if not daemon:
+        click.echo()
+        click.echo("Watchers are running in background threads.")
+        click.echo("Use 'cloudsync watch status' to check them.")
+        click.echo("Use 'cloudsync watch stop' to stop them.")
 
 
 @watch.command("stop")
 @config_option()
-def watch_stop(config: str):
-    """Stop all fswatch processes."""
-    click.secho("Not yet implemented — Phase 2", fg="yellow")
+@click.option("--dir", "-d", "directory", help="Stop watcher for specific directory only")
+def watch_stop(config: str, directory: str):
+    """Stop fswatch watchers."""
+    cfg = _load_or_fail(config, check_paths=False)
+
+    from cloudsync.watcher import stop_watcher, stop_all
+    from cloudsync.logger import setup_logging
+    setup_logging(cfg, console=True)
+
+    if directory:
+        stopped = stop_watcher(cfg, directory)
+        if stopped:
+            click.secho(f"Stopped watcher for '{directory}'", fg="green")
+        else:
+            click.secho(f"Watcher for '{directory}' was not running", fg="yellow")
+    else:
+        results = stop_all(cfg)
+        for name, stopped in results.items():
+            if stopped:
+                click.secho(f"  ✓ {name}: stopped", fg="green")
+            else:
+                click.secho(f"  — {name}: was not running", fg="yellow")
+
+
+@watch.command("status")
+@config_option()
+def watch_status(config: str):
+    """Show status of all watchers."""
+    cfg = _load_or_fail(config, check_paths=False)
+
+    from cloudsync.watcher import get_status
+    from cloudsync.logger import setup_logging
+    setup_logging(cfg, console=False)
+
+    statuses = get_status(cfg)
+
+    if not statuses:
+        click.echo("No watched directories configured.")
+        return
+
+    click.echo()
+    for name, meta in statuses.items():
+        # Status indicator
+        if meta.status == "running":
+            click.secho(f"  ● {name}", fg="green", nl=False)
+            click.echo(f" — PID {meta.pid}")
+        elif meta.status == "dead":
+            click.secho(f"  ✗ {name}", fg="red", nl=False)
+            click.echo(f" — process died (was PID {meta.pid})")
+        else:
+            click.secho(f"  ○ {name}", fg="yellow", nl=False)
+            click.echo(f" — stopped")
+
+        # Details
+        click.echo(f"    Source:  {meta.source_path}")
+        if meta.started_at:
+            click.echo(f"    Started: {meta.started_at}")
+        if meta.stopped_at:
+            click.echo(f"    Stopped: {meta.stopped_at}")
+        click.echo(f"    Events:  {meta.event_count}")
+        if meta.last_event_at:
+            click.echo(f"    Last:    {meta.last_event_at}")
+            click.echo(f"    File:    {meta.last_event_path}")
+        click.echo()
 
 
 @watch.command("logs")
 @config_option()
-@click.option("--dir", "-d", "directory", help="Directory name to show logs for")
-@click.option("--tail", "-n", default=20, help="Number of log lines")
-def watch_logs(config: str, directory: str, tail: int):
-    """Show recent fswatch events."""
-    click.secho("Not yet implemented — Phase 2", fg="yellow")
+@click.option("--dir", "-d", "directory", required=True, help="Directory name to show logs for")
+@click.option("--tail", "-n", default=20, help="Number of log lines to show")
+@click.option("--date", help="Specific date (YYYY-MM-DD), default today")
+def watch_logs(config: str, directory: str, tail: int, date: str):
+    """Show recent fswatch events for a directory."""
+    cfg = _load_or_fail(config, check_paths=False)
 
+    from cloudsync.watcher import read_events
+    from cloudsync.logger import setup_logging
+    setup_logging(cfg, console=False)
+
+    events = read_events(cfg, directory, tail=tail, date=date)
+
+    if not events:
+        click.echo(f"No events found for '{directory}'" +
+                    (f" on {date}" if date else " today"))
+        click.echo(f"Log dir: {cfg.project.log_dir}/fswatch/")
+        return
+
+    click.echo(f"Last {min(tail, len(events))} events for '{directory}':")
+    click.echo()
+    for line in events:
+        # Color-code by event type
+        if "Created" in line:
+            click.secho(f"  + {line}", fg="green")
+        elif "Removed" in line:
+            click.secho(f"  - {line}", fg="red")
+        elif "Updated" in line or "Modified" in line:
+            click.secho(f"  ~ {line}", fg="yellow")
+        elif "Renamed" in line or "Moved" in line:
+            click.secho(f"  → {line}", fg="cyan")
+        else:
+            click.echo(f"  {line}")
+
+    click.echo()
+    click.echo(f"Total lines in log: {len(read_events(cfg, directory, tail=None, date=date))}")
+
+
+# ── Phase 3+ placeholders ───────────────────────────────────
 
 @cli.command()
 @config_option()
@@ -291,7 +396,7 @@ def check(config: str, directory: str, checksum: bool):
 
 @cli.command()
 @config_option()
-@click.option("--week", help="Specific week to show (e.g., 2026-W18)")
+@click.option("--week", help="Specific week (e.g., 2026-W18)")
 def changelog(config: str, week: str):
     """Show change history. (Phase 4)"""
     click.secho("Not yet implemented — Phase 4", fg="yellow")
